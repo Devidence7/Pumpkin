@@ -5735,6 +5735,7 @@ impl Entity {
             .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(Arc::downgrade(&vehicle));
 
         if let Some(player) = passenger.get_player() {
+            player.clear_dismount_tracking();
             let other_passenger_type = passengers
                 .first()
                 .map(|p| format!("minecraft:{}", p.get_entity().entity_type.resource_name));
@@ -5815,6 +5816,9 @@ impl Entity {
         vehicle: Arc<dyn EntityBase>,
         passenger: Arc<dyn EntityBase>,
     ) {
+        if let Some(player) = passenger.get_player() {
+            player.clear_dismount_tracking();
+        }
         *passenger
             .get_entity()
             .vehicle
@@ -6225,6 +6229,11 @@ impl Entity {
                         .lock()
                         .unwrap_or_else(std::sync::PoisonError::into_inner) =
                         Some((id.into(), dismount_pos));
+                    if player.client.java().is_some()
+                        && self.entity_type == &EntityType::HAPPY_GHAST
+                    {
+                        player.dismount_platform.store(Some(self.entity_id));
+                    }
                     // Use send_client_packet so the teleport goes through
                     // the same packet queue as CSetPassengers, preserving send order.
                     // Vanilla uses DELTA | ROT flags: position absolute, delta/rotation relative.

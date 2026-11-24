@@ -1815,6 +1815,11 @@ impl World {
             }
             order::set_entity_order(None);
         }
+        // Vanilla Player::rideTick handles Shift after movement. Dismount callbacks can
+        // run plugins, so finish them outside the parallel entity and rider phases.
+        for player in players.iter() {
+            player.finish_sneak_dismount();
+        }
         // Vanilla `rideTick`: riders follow their vehicle's seat once it has moved
         tickable.par_iter().for_each(|(entity, _)| {
             if !entity.is_passenger() && entity.get_entity().has_passengers() {

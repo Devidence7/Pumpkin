@@ -1,6 +1,7 @@
 mod block_tuning_and_invert;
 mod commands_and_gamemode;
 mod embedded_stop;
+mod happy_ghast;
 mod login_and_movement;
 mod loot_tables;
 mod player_actions;
@@ -26,6 +27,8 @@ pub async fn run_bot_tests(
 
     let (mut bot1, bot2) =
         login_and_movement::run_login_and_movement_tests(server, addr, summary_lines).await?;
+
+    happy_ghast::run_happy_ghast_dismount_test(server, summary_lines).await?;
 
     commands_and_gamemode::run_commands_and_gamemode_tests(
         server,

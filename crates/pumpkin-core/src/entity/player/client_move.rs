@@ -81,20 +81,52 @@ impl Player {
         }
 
         let entity = self.get_entity();
-        if entity.is_sneaking() != sneak {
+        if entity.is_sneaking() == sneak {
+            self.update_sneak_dismount(sneak);
+        } else {
             send_cancellable_blocking! {{
                 server;
                 PlayerToggleSneakEvent::new(player, sneak);
                 'after: {
                     entity.set_sneaking(event.is_sneaking);
-                    if event.is_sneaking {
-                        dismount_if_riding(entity);
-                    }
+                    self.update_sneak_dismount(event.is_sneaking);
                 }
             }}
-        } else if sneak {
-            dismount_if_riding(entity);
         }
+    }
+
+    fn update_sneak_dismount(&self, sneaking: bool) {
+        let entity = self.get_entity();
+        let vehicle = if sneaking { entity.get_vehicle() } else { None };
+        if self.client.java().is_some() {
+            self.pending_sneak_dismount
+                .store(vehicle.map(|vehicle| vehicle.get_entity().entity_id));
+        } else if let Some(vehicle) = vehicle {
+            vehicle.get_entity().remove_passenger(entity.entity_id);
+        }
+    }
+
+    /// Vanilla `Player::rideTick` checks Shift after the vehicle's final move.
+    pub(crate) fn finish_sneak_dismount(&self) {
+        let Some(requested_vehicle) = self.pending_sneak_dismount.swap(None) else {
+            return;
+        };
+        let entity = self.get_entity();
+        if self.has_client_loaded()
+            && !entity.is_removed()
+            && entity.is_sneaking()
+            && let Some(vehicle) = entity.get_vehicle()
+            && vehicle.get_entity().entity_id == requested_vehicle
+            && !vehicle.get_entity().is_removed()
+            && Arc::ptr_eq(&entity.world.load(), &vehicle.get_entity().world.load())
+        {
+            vehicle.get_entity().remove_passenger(entity.entity_id);
+        }
+    }
+
+    pub(in crate::entity) fn clear_dismount_tracking(&self) {
+        self.pending_sneak_dismount.store(None);
+        self.dismount_platform.store(None);
     }
 
     /// Vanilla `ServerboundPlayerCommandPacket` start/stop sprinting
@@ -272,6 +304,11 @@ impl Player {
         }
 
         let pos = target.unwrap_or(last_pos);
+        if self.enters_dismount_platform(pos) {
+            self.apply_look(requested);
+            self.reject_client_move();
+            return ClientMoveOutcome::Rejected;
+        }
         let was_on_ground = entity.on_ground.load(Ordering::Relaxed);
         entity.set_pos(pos);
 
@@ -337,6 +374,45 @@ impl Player {
         self.progress_motion(delta);
 
         ClientMoveOutcome::Applied
+    }
+
+    fn enters_dismount_platform(&self, target: Vector3<f64>) -> bool {
+        let Some(platform) = self.dismount_platform.load() else {
+            return false;
+        };
+        let entity = self.get_entity();
+        let delta = target - entity.pos.load();
+        if delta == Vector3::default() {
+            return false;
+        }
+        let Some(platform) = self.world().get_entity_by_id(platform).filter(|platform| {
+            !entity.no_physics.load(Ordering::Relaxed)
+                && !platform.get_entity().is_removed()
+                && platform.is_collidable(Some(self))
+        }) else {
+            self.dismount_platform.store(None);
+            return false;
+        };
+        let platform = platform.get_entity().bounding_box.load();
+        // Vanilla's new-collision check contracts the box before comparing contacts.
+        let bounds = entity
+            .bounding_box
+            .load()
+            .contract_all(f64::from(1.0e-5f32));
+        let target_bounds = bounds.shift(delta);
+        if bounds.min.y < platform.max.y
+            || [bounds, target_bounds].iter().any(|bounds| {
+                bounds.min.x >= platform.max.x
+                    || bounds.max.x <= platform.min.x
+                    || bounds.min.z >= platform.max.z
+                    || bounds.max.z <= platform.min.z
+            })
+        {
+            self.dismount_platform.store(None);
+            return false;
+        }
+
+        target_bounds.intersects(&platform)
     }
 
     fn look_changed(&self, requested: ClientMove) -> bool {
@@ -466,10 +542,4 @@ fn packed_delta(last_pos: Vector3<f64>, pos: Vector3<f64>) -> Vector3<i16> {
         pos.y.mul_add(4096.0, -(last_pos.y * 4096.0)) as i16,
         pos.z.mul_add(4096.0, -(last_pos.z * 4096.0)) as i16,
     )
-}
-
-fn dismount_if_riding(entity: &crate::entity::Entity) {
-    if let Some(vehicle) = entity.get_vehicle() {
-        vehicle.get_entity().remove_passenger(entity.entity_id);
-    }
 }

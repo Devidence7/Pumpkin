@@ -664,6 +664,10 @@ pub struct Player {
     /// Start tick of the delayed destroy.
     pub delayed_tick_start: AtomicI32,
     pub last_input: AtomicI8,
+    /// The mount named by the accepted Java sneak input, consumed after vehicle movement.
+    pending_sneak_dismount: AtomicCell<Option<i32>>,
+    /// The Happy Ghast supporting the player immediately after dismount.
+    pub(super) dismount_platform: AtomicCell<Option<i32>>,
     /// A counter for teleport IDs used to track pending teleports.
     pub teleport_id_count: AtomicI32,
     /// The pending teleport information, including the teleport ID and target location.
@@ -989,6 +993,8 @@ impl Player {
             tick_counter: AtomicI32::new(0),
             start_mining_time: AtomicI32::new(0),
             last_input: AtomicI8::new(0),
+            pending_sneak_dismount: AtomicCell::new(None),
+            dismount_platform: AtomicCell::new(None),
             carried_item: Mutex::new(None),
             experience_pick_up_delay: Mutex::new(0),
             teleport_id_count: AtomicI32::new(0),
@@ -4882,6 +4888,7 @@ impl Player {
                 let new_world = event.new_world;
 
                 self.reset_mining();
+                self.clear_dismount_tracking();
                 self.set_client_loaded(false);
                 let Some(player) = current_world.remove_player(self, false).await else {
                     return;
@@ -5013,6 +5020,7 @@ impl Player {
             }
         }
 
+        self.clear_dismount_tracking();
         let i = self.teleport_id_count.fetch_add(1, Ordering::Relaxed);
         self.chunk_send_epoch.fetch_add(1, Ordering::Relaxed);
         let teleport_id = i + 1;
